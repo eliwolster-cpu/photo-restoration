@@ -8,6 +8,8 @@ import sys
 import cv2
 import numpy as np
 
+from baseline_inpaint import read_image, write_png
+
 
 def red_mask(marked_bgr):
     b, g, r = marked_bgr[..., 0], marked_bgr[..., 1], marked_bgr[..., 2]
@@ -15,9 +17,9 @@ def red_mask(marked_bgr):
 
 
 if __name__ == "__main__":
-    marked = cv2.imread(sys.argv[1], cv2.IMREAD_COLOR)
+    marked = read_image(sys.argv[1], cv2.IMREAD_COLOR)
     if marked is None:
         raise SystemExit(f"cannot read image: {sys.argv[1]}")
     mask = red_mask(marked)
-    cv2.imwrite(sys.argv[2], mask)
+    write_png(sys.argv[2], mask)
     print(f"mask area: {100 * (mask > 0).mean():.2f}%")
