@@ -70,7 +70,7 @@ photo-restoration/
 **פרטיות:** התמונות עולות ל-VM של Colab. מעלים רק את 5 תמונות הניסוי (שיש עליהן הרשאה), ומוחקים אותן מהסשן בסוף. אין מפתחות ב-notebook.
 
 ### [ ] שלב ב'1: הכנת Colab והרצת Real-ESRGAN
-- **מה נבנה:** `experiments/colab/run_tools.ipynb` (נשמר בלי פלט, וצריך להוסיף חריגה ל-`.gitignore` ל-`experiments/colab/*.ipynb`). תא התקנה עם גרסאות מקובעות, העלאת 5 התמונות, הרצת Real-ESRGAN, והורדת zip של התוצרים ל-`experiments/output_b/realesrgan/`. נרשם זמן ריצה והמעבד הגרפי (למשל T4).
+- **מה נבנה:** `experiments/colab_experiment_b.ipynb` (נשמר בלי פלט, עם חריגה ב-`.gitignore`). ה-notebook מכסה את שלבים ב'1–ב'3 יחד. תא התקנה עם גרסאות מקובעות, העלאת 5 התמונות, הרצת Real-ESRGAN, והורדת zip של התוצרים ל-`experiments/output_b/realesrgan/`. נרשם זמן ריצה והמעבד הגרפי (למשל T4).
 - **איך בודקים:** 5 תמונות פלט בגודל ×4, ונשמר זמן לכל תמונה. ה-notebook רץ מההתחלה בסשן נקי.
 - **לא כולל:** שאר הכלים, והתקנת תלויות כבדות ב-`requirements.txt` של הפרויקט.
 

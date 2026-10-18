@@ -27,6 +27,7 @@ experiments/**
 !experiments/**/
 !experiments/**/*.py
 !experiments/**/results.csv
+!experiments/*.ipynb
 
 # Personal photos and extra secrets must never be committed
 data/
