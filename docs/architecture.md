@@ -45,6 +45,33 @@
 - **כלים מרוחקים (API בענן) מממשים את אותו חוזה** – החלטת התשתית הפתוחה לא משנה את שאר הקוד.
 - **MVP מתחיל עם שני כלים:** `opencv_inpaint` (TELEA/NS כפרמטר) ו-`opencv_unsharp`.
 
+### 3.1 שילוב כלי AI (ניסוי ב', ראה `docs/decisions.md` החלטה 1)
+
+שלושת הכלים המועמדים לא נכנסים בצורה נקייה לשני הסוגים הקיימים, ולכן הממשק מורחב בשלושה שדות בלבד, בלי ממשק נפרד לכל כלי:
+
+| תוספת | למה |
+|---|---|
+| `kind: restorer` (סוג שלישי) | כלי שמזהה נזק בעצמו ומתקן, בלי לקבל מסכה (Bringing Old Photos עם `--with_scratch`). בניגוד ל-`inpainter` הוא מחזיר את המסכה שיצר. |
+| `scope`: `mask` / `faces` / `full_image` | האזור שהכלי רשאי לשנות. OpenCV inpaint = `mask`, CodeFormer = `faces`, Real-ESRGAN ו-Bringing Old Photos = `full_image`. נכנס לדוח ולבדיקות. |
+| `requires_gpu`, `license`, `runner` | `runner`: `local` או `remote`. כלי עם `requires_gpu` רץ רק ב-`remote`. הרישיון נרשם בדוח, ובכלי לא מסחרי יש הערה בקובץ הכלי. |
+
+**מיפוי הכלים:**
+
+| כלי | `kind` | `scope` | `scale` | מסכה ב-`ToolOutput` | תוצאה בהשוואה |
+|---|---|---|---|---|---|
+| `opencv_inpaint` | inpainter | mask | 1 | המסכה שהתקבלה | מחוץ למסכה חייב להיות זהה |
+| `bopbtl_scratch` | restorer | full_image | 1 | מסכת השריטות של הכלי | אין ערובה לאי-שינוי מחוץ למסכה, ולכן `compare` בודק ומסמן |
+| `codeformer` (`fidelity=0.7`) | enhancer | faces | 1 | תיבות הפנים שזוהו | כל תמונה עם פנים ששונו מקבלת `review` |
+| `realesrgan_x4` | enhancer | full_image | 4 | כל התמונה | `compare` מקטין לגודל המקור לפני ההשוואה |
+
+**כללים לשילוב:**
+- **הרצה מרוחקת אינה משנה את החוזה.** כלי `remote` מעלה את התמונה, ממתין ומחזיר `ToolOutput` רגיל; כשל או חריגת זמן הם `failed` לפי סעיף 6. ב-Colab אין שירות לקרוא לו, ולכן בניסוי ההרצה ידנית ב-notebook, ובקוד ה-MVP החיבור ל-Colab או לשירות אחר נקבע בהחלטת התשתית.
+- **מסכה בפועל היא חובה בפלט.** `compare` משתמש ב-`ToolOutput.mask` ולא באמונה שהכלי נשאר בגבולות המסכה, ולכן כלי `full_image` לא יכול להפר בשקט את הכלל "מחוץ למסכה לא משתנה". הוא יקבל `review` או `failed` לפי הספים.
+- **סדר השלבים נשאר.** `restorer` תופס את מקום `masking` + `clean` (הוא עושה את שניהם), ו-`enhancer` תופס את `sharpen`. `pipeline` מדלג על `masking` כשהכלי הנבחר הוא `restorer`.
+- **כלי שמשנה פנים (`scope: faces` או `full_image` עם שיפור פנים) מוסיף את הסיבה `face_regenerated` ל-`Decision`.** הסיבה הזו אף פעם לא מניבה `done`.
+- **ב-`config.yaml`** נבחר הכלי בשם (`clean.tool: bopbtl_scratch`) והפרמטרים (`fidelity: 0.7`) נשמרים בדוח כמו שהם.
+- **תלויות כבדות (PyTorch, ה-weights) לא נכנסות ל-`requirements.txt`.** הן חיות בסביבת ההרצה המרוחקת, והקובץ המקומי של כלי AI הוא עטיפה דקה.
+
 ## 4. מודל נתונים: משימה (`Job`)
 
 נשמרת כ-`storage/jobs/<job_id>.json` ומתעדכנת בכל מעבר מצב.
