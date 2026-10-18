@@ -20,3 +20,10 @@ storage/
 docs/.obsidian/
 .vscode/
 .idea/
+
+# Feasibility experiment: keep only scripts and results.csv
+# (test photos, masks and outputs stay local)
+experiments/**
+!experiments/**/
+!experiments/**/*.py
+!experiments/**/results.csv
