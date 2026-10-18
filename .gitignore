@@ -39,3 +39,8 @@ data/
 *.tiff
 *.bmp
 *.png
+
+# ...except design mockups, which belong in Git
+!design/**/*.jpg
+!design/**/*.jpeg
+!design/**/*.png
