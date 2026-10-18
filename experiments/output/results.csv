@@ -1,0 +1,13 @@
+﻿image,mask,method,mask_area_pct,iou_auto_vs_manual,seconds,fidelity_1_5,improvement_1_5,notes
+1_cracks,auto,telea,26.14,0.098,0.09,,,
+1_cracks,auto,ns,26.14,0.098,0.08,,,
+1_cracks,manual,telea,5.38,0.098,0.01,,,
+1_cracks,manual,ns,5.38,0.098,0.01,,,
+2_stains,auto,telea,10.16,,0.08,,,
+2_stains,auto,ns,10.16,,0.07,,,
+3_tear,auto,telea,22.33,,0.16,,,
+3_tear,auto,ns,22.33,,0.14,,,
+4_blur,auto,telea,33.16,,0.11,,,
+4_blur,auto,ns,33.16,,0.12,,,
+5_faces,auto,telea,32.53,,0.08,,,
+5_faces,auto,ns,32.53,,0.08,,,
