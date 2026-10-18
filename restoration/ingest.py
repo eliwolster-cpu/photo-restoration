@@ -9,6 +9,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from PIL import Image, UnidentifiedImageError
 
 SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp"}
 # Sanity limits; they move to config.yaml once the config module exists (plan step 5).
@@ -52,6 +53,17 @@ def _validate(path):
         raise IngestError(f"file is empty: {path}")
     if size > MAX_FILE_BYTES:
         raise IngestError(f"file too large ({size} bytes, max {MAX_FILE_BYTES})")
+    # Read the declared size from the header first, so a small file that claims a huge
+    # canvas (decompression bomb) is rejected before any pixel memory is allocated.
+    try:
+        with Image.open(path) as header:
+            declared_w, declared_h = header.size
+    except Image.DecompressionBombError as e:
+        raise IngestError(f"image too large (decompression bomb): {path}") from e
+    except (UnidentifiedImageError, OSError, ValueError) as e:
+        raise IngestError(f"file is corrupt or not a readable image: {path}") from e
+    if declared_w * declared_h > MAX_PIXELS:
+        raise IngestError(f"image too large ({declared_w}x{declared_h} pixels, max {MAX_PIXELS})")
     # np.fromfile + imdecode, because cv2.imread fails on non-ASCII Windows paths
     image = cv2.imdecode(np.fromfile(str(path), np.uint8), cv2.IMREAD_UNCHANGED)
     if image is None:

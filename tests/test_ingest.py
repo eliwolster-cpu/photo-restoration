@@ -80,3 +80,21 @@ def test_cli_exit_codes(photo, tmp_path, capsys):
     assert restore.main([str(photo), "--storage", storage]) == 0
     assert "duplicate" in capsys.readouterr().out
     assert restore.main([str(tmp_path / "nope.jpg"), "--storage", storage]) == 1
+
+
+def test_decompression_bomb_rejected_before_decoding(tmp_path):
+    import struct
+    import zlib
+
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+
+    # 5-chunk-sized PNG that declares a 60000x60000 RGB canvas (~10 GB when decoded)
+    ihdr = struct.pack(">IIBBBBB", 60000, 60000, 8, 2, 0, 0, 0)
+    bomb = tmp_path / "bomb.png"
+    bomb.write_bytes(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IEND", b""))
+    before = sha256_file(bomb)
+    with pytest.raises(IngestError, match="too large"):
+        ingest(bomb, tmp_path / "s")
+    assert sha256_file(bomb) == before
+    assert not (tmp_path / "s" / "originals").exists()

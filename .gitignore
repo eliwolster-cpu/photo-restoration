@@ -27,3 +27,15 @@ experiments/**
 !experiments/**/
 !experiments/**/*.py
 !experiments/**/results.csv
+
+# Personal photos and extra secrets must never be committed
+data/
+.env.*
+*.pem
+*.key
+*.jpg
+*.jpeg
+*.tif
+*.tiff
+*.bmp
+*.png
