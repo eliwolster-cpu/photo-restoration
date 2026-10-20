@@ -1,0 +1,5 @@
+# Fixed treatment settings and thresholds. Thresholds live here, not in code.
+ingest:
+  max_file_bytes: 209715200   # 200 MB
+  max_pixels: 100000000
+  min_side: 32
