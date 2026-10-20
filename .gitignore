@@ -45,3 +45,6 @@ data/
 !design/**/*.jpg
 !design/**/*.jpeg
 !design/**/*.png
+
+# Downloaded models (fetch with python models/download_models.py)
+models/*.onnx
