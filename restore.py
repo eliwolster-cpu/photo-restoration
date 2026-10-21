@@ -96,7 +96,7 @@ def _save_outputs(storage, job_id, original, result, mask):
     return result_path
 
 
-def _process_generative(job, config, storage, name, gcfg, raw=None, engine="gemini"):
+def _process_generative(job, config, storage, name, gcfg, raw=None, engine="gemini", faces_src=None):
     """A model restores the whole photo; original faces are pasted back; structure is checked.
 
     raw: a result already produced elsewhere (e.g. DiffBIR on Colab); None = ask Gemini now.
@@ -108,7 +108,9 @@ def _process_generative(job, config, storage, name, gcfg, raw=None, engine="gemi
     if raw is None:
         raw = gemini_restore(original, gcfg.get("prompt", DEFAULT_PROMPT), gcfg.get("model", DEFAULT_MODEL))
     aligned, resized, shift = match_size(_bgr(original), raw)
-    result = paste_original_faces(_bgr(original), aligned, faces_found, gcfg.get("face_pad", 0.25))
+    # faces come from the original, or from faces_src (e.g. the crack-cleaned image: same pixels except the cracks)
+    face_source = _bgr(original) if faces_src is None else match_size(_bgr(original), _bgr(faces_src))[0]
+    result = paste_original_faces(face_source, aligned, faces_found, gcfg.get("face_pad", 0.25))
 
     nothing = np.zeros(original.shape[:2], np.uint8)
     structure = compare_outside_mask(_bgr(original), result, nothing)
@@ -203,6 +205,7 @@ def main(argv=None):
                              "(sends the image to Google; needs GEMINI_API_KEY in .env); "
                              "external = use a restored image made elsewhere (--raw), e.g. DiffBIR on Colab")
     parser.add_argument("--raw", help="with --engine external: the restored image to post-process")
+    parser.add_argument("--faces-from", help="with --engine external: take the faces from this image instead of the original")
     parser.add_argument("--model", help="Gemini model id (default from config generative.model)")
     args = parser.parse_args(argv)
 
@@ -230,7 +233,11 @@ def main(argv=None):
                 print("error: --engine external needs --raw <readable image>", file=sys.stderr)
                 return 1
             gcfg["tool_label"] = f"external:{Path(args.raw).name}"
-        process = lambda j: _process_generative(j, config, args.storage, ingested.source_name, gcfg, raw, args.engine)
+        faces_src = _read(args.faces_from, cv2.IMREAD_COLOR) if args.faces_from else None
+        if args.faces_from and faces_src is None:
+            print("error: cannot read --faces-from image", file=sys.stderr)
+            return 1
+        process = lambda j: _process_generative(j, config, args.storage, ingested.source_name, gcfg, raw, args.engine, faces_src)
     else:
         process = lambda j: _process(j, config, args.storage, ingested.source_name, args.mask)
     run_job(job, process, args.storage)
