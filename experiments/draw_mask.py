@@ -83,17 +83,18 @@ class Editor:
         return view
 
 
-def run(image_path, out_path):
+def run(image_path, out_path, start=None):
     image = read_image(image_path, cv2.IMREAD_COLOR)
     if image is None:
         raise SystemExit(f"cannot read image: {image_path}")
     out_path = Path(out_path)
     mask = None
-    if out_path.is_file():
-        mask = read_image(out_path, cv2.IMREAD_GRAYSCALE)
+    source = out_path if out_path.is_file() else start
+    if source:
+        mask = read_image(source, cv2.IMREAD_GRAYSCALE)
         if mask is None or mask.shape != image.shape[:2]:
-            raise SystemExit(f"existing mask does not match the image: {out_path}")
-        print(f"loaded existing mask: {out_path}")
+            raise SystemExit(f"mask does not match the image: {source}")
+        print(f"loaded mask: {source}")
     ed = Editor(image, mask)
     state = {"drag": None}
     title = f"draw mask - {Path(image_path).name}"
@@ -153,5 +154,6 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("image")
     p.add_argument("--out")
+    p.add_argument("--start", help="mask to start from (e.g. an automatic proposal), used if --out does not exist yet")
     a = p.parse_args()
-    run(a.image, a.out or f"experiments/masks/{Path(a.image).stem}_mask.png")
+    run(a.image, a.out or f"experiments/masks/{Path(a.image).stem}_mask.png", a.start)
