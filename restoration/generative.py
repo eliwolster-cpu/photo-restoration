@@ -45,6 +45,11 @@ def gemini_restore(image, prompt=DEFAULT_PROMPT, model=DEFAULT_MODEL, api_key=No
         from PIL import Image
     except ImportError as e:
         raise GenerativeError("needs the package google-genai (pip install google-genai)") from e
+    try:   # corporate networks re-sign TLS; trust the OS certificate store instead of certifi only
+        import truststore
+        truststore.inject_into_ssl()
+    except ImportError:
+        pass
     api_key = api_key or load_api_key()
     ok, png = cv2.imencode(".png", image[..., :3] if image.ndim == 3 else image)
     if not ok:
