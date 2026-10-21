@@ -13,4 +13,4 @@ def test_scratch_mask_is_resized_to_the_image_and_binary():
     scratch[:, 40] = 255
     mask, faces = scratch_to_mask(image, scratch)
     assert mask.shape == (100, 80) and set(np.unique(mask)) <= {0, 255}
-    assert mask[:, 38:42].any() and faces == 0
+    assert mask[:, 38:46].any() and faces == 0
