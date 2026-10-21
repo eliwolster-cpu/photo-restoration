@@ -16,7 +16,10 @@ clean:
     enabled: false
     chroma_threshold: 10      # strong core of a stain (Lab chroma distance from the local median)
     chroma_low: 5             # the region grows to this weaker level
-    border_margin: 0.03       # ignore this share of each side (the scan edge looks like a stain)
+    border_margin: 0.06       # drop blotches closer than this share of the image side to the edge (scan border)
+    min_darkening: 8          # a stain is darker than its surroundings (Lab L); lighter colored things are content
+    min_saturation: 15        # a stain is really colored; dark uncolored objects are not
+    min_fill: 0.35            # blotches are compact; thin or branching shapes are edges
 
 sharpen:                      # global, applied after cleaning; off by default
   enabled: false

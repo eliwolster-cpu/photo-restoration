@@ -57,16 +57,25 @@ def detect_stains(image, cfg, exclude_boxes=()):
     n, labels, st, _ = cv2.connectedComponentsWithStats(low, connectivity=8)
     strong = np.unique(labels[dev > cfg.get("chroma_threshold", 10)])
     cand = np.where(np.isin(labels, strong[strong > 0]), 255, 0).astype(np.uint8)
-    margin = int(cfg.get("border_margin", 0.03) * min(cand.shape))
-    if margin > 0:   # the scan edge against the white background looks like a stain
-        cand[:margin] = cand[-margin:] = 0
-        cand[:, :margin] = cand[:, -margin:] = 0
     n, labels, st, _ = cv2.connectedComponentsWithStats(cand, connectivity=8)
+    margin = int(cfg.get("border_margin", 0.06) * min(cand.shape))
     max_area = cfg.get("max_area_fraction", 0.01) * cand.size
+    lightness = lab[..., 0].astype(np.float32) - cv2.medianBlur(lab, cfg.get("background_size", 61))[..., 0]
+    saturation = np.hypot(lab[..., 1].astype(np.float32) - 128, lab[..., 2].astype(np.float32) - 128)
     mask = np.zeros_like(cand)
     for i in range(1, n):
-        if cfg.get("min_area", 25) <= st[i, cv2.CC_STAT_AREA] <= max_area:
-            mask[labels == i] = 255
+        x, y, w, h, area = st[i]
+        if not cfg.get("min_area", 25) <= area <= max_area:
+            continue
+        if min(x, y, cand.shape[1] - x - w, cand.shape[0] - y - h) < margin:
+            continue    # touches the scan edge, which looks like a stain against the white border
+        if area < cfg.get("min_fill", 0.35) * w * h:
+            continue    # thin or branching: an edge or an object, not a blotch
+        if lightness[labels == i].mean() > -cfg.get("min_darkening", 8):
+            continue    # stains darken; lighter colored things (flowers, highlights) are content
+        if saturation[labels == i].mean() < cfg.get("min_saturation", 15):
+            continue    # a dark but uncolored region is an object or shadow, not a colored stain
+        mask[labels == i] = 255
     grow = cfg.get("dilate_px", 6)
     if grow > 0:
         mask = cv2.dilate(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * grow + 1,) * 2))
