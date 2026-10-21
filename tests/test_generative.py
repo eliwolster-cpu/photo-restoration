@@ -69,3 +69,17 @@ def test_gemini_failure_marks_the_job_failed(tmp_path, monkeypatch):
     src = tmp_path / "photo.png"
     cv2.imencode(".png", smooth(5, (200, 160)))[1].tofile(str(src))
     assert restore.main([str(src), "--engine", "gemini", "--storage", str(tmp_path / "s")]) == 1
+
+
+def test_external_engine_postprocesses_a_given_result(tmp_path):
+    src = tmp_path / "photo.png"
+    img = smooth(6, (200, 160))
+    cv2.imencode(".png", img)[1].tofile(str(src))
+    raw = tmp_path / "diffbir.png"
+    cv2.imencode(".png", cv2.GaussianBlur(img, (0, 0), 1.0))[1].tofile(str(raw))
+    storage = str(tmp_path / "s")
+    assert restore.main([str(src), "--engine", "external", "--raw", str(raw), "--storage", storage]) == 0
+    report = json.loads(next((tmp_path / "s" / "reports").glob("*-restored.json")).read_text(encoding="utf-8"))
+    assert report["engine"] == "external" and report["tools"][0] == "external:diffbir.png"
+    assert "sent_to_external_service" not in report
+    assert restore.main([str(src), "--engine", "external", "--storage", storage]) == 1

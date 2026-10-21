@@ -2,6 +2,7 @@
 
 Usage: python restore.py <image> [--mask MASK.png] [--backend telea|ns|lama]
        python restore.py <image> --engine gemini [--model ID]   (whole-photo generative restoration)
+       python restore.py <image> --engine external --raw RESTORED.png   (post-process e.g. a DiffBIR output)
 """
 import argparse
 import json
@@ -95,13 +96,17 @@ def _save_outputs(storage, job_id, original, result, mask):
     return result_path
 
 
-def _process_generative(job, config, storage, name, gcfg):
-    """Gemini restores the whole photo; original faces are pasted back; structure is checked."""
+def _process_generative(job, config, storage, name, gcfg, raw=None, engine="gemini"):
+    """A model restores the whole photo; original faces are pasted back; structure is checked.
+
+    raw: a result already produced elsewhere (e.g. DiffBIR on Colab); None = ask Gemini now.
+    """
     original = _read(job.data["paths"]["original"])
     if original.dtype != np.uint8:
         raise GenerativeError(f"unsupported bit depth {original.dtype}; only 8-bit images are supported")
     faces_found = detect_faces(original)
-    raw = gemini_restore(original, gcfg.get("prompt", DEFAULT_PROMPT), gcfg.get("model", DEFAULT_MODEL))
+    if raw is None:
+        raw = gemini_restore(original, gcfg.get("prompt", DEFAULT_PROMPT), gcfg.get("model", DEFAULT_MODEL))
     aligned, resized, shift = match_size(_bgr(original), raw)
     result = paste_original_faces(_bgr(original), aligned, faces_found, gcfg.get("face_pad", 0.25))
 
@@ -120,20 +125,22 @@ def _process_generative(job, config, storage, name, gcfg):
     status = REVIEW if reasons else DONE
 
     result_path = _save_outputs(storage, job.data["job_id"], _bgr(original), result, nothing)
-    tools = [f"gemini:{gcfg.get('model', DEFAULT_MODEL)}", "faces_pasted_back"]
+    tools = [gcfg.get("tool_label") or f"gemini:{gcfg.get('model', DEFAULT_MODEL)}", "faces_pasted_back"]
     report = {
         "job_id": job.data["job_id"], "source_name": name, "status": status, "reasons": reasons,
-        "tools": tools, "config_version": job.data["config_version"], "engine": "gemini",
+        "tools": tools, "config_version": job.data["config_version"], "engine": engine,
         "model_resized_output": resized, "shift_px": shift, "faces_pasted_back": len(faces_found),
         "structure": {"ssim": structure.ssim, "changed_fraction": structure.changed_fraction},
         "faces": {"original": faces.original_count, "result": faces.result_count,
                   "ssim": [c.ssim for c in faces.checks]},
-        "result": str(result_path), "sent_to_external_service": "Google Gemini API",
+        "result": str(result_path),
     }
+    if engine == "gemini":
+        report["sent_to_external_service"] = "Google Gemini API"
     (Path(storage) / "reports" / f"{job.data['job_id']}-restored.json").write_text(
         json.dumps(report, indent=2), encoding="utf-8")
-    log.info("%s job=%s status=%s engine=gemini model=%s structure_ssim=%.3f shift=%.1fpx faces_pasted_back=%d reasons=%s",
-             name, job.data["job_id"], status, gcfg.get("model", DEFAULT_MODEL), structure.ssim, shift,
+    log.info("%s job=%s status=%s engine=%s model=%s structure_ssim=%.3f shift=%.1fpx faces_pasted_back=%d reasons=%s",
+             name, job.data["job_id"], status, engine, tools[0], structure.ssim, shift,
              len(faces_found), reasons)
     return status, reasons
 
@@ -191,9 +198,11 @@ def main(argv=None):
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument("--mask", help="manual damage mask (white = damage); default is automatic")
     parser.add_argument("--backend", choices=["telea", "ns", "lama"], help="override clean.backend")
-    parser.add_argument("--engine", choices=["local", "gemini"], default="local",
+    parser.add_argument("--engine", choices=["local", "gemini", "external"], default="local",
                         help="local = mask + inpainting; gemini = whole-photo generative restoration "
-                             "(sends the image to Google; needs GEMINI_API_KEY in .env)")
+                             "(sends the image to Google; needs GEMINI_API_KEY in .env); "
+                             "external = use a restored image made elsewhere (--raw), e.g. DiffBIR on Colab")
+    parser.add_argument("--raw", help="with --engine external: the restored image to post-process")
     parser.add_argument("--model", help="Gemini model id (default from config generative.model)")
     args = parser.parse_args(argv)
 
@@ -208,13 +217,20 @@ def main(argv=None):
         return 1
     job = Job.create(ingested.job_id, ingested.source_name, ingested.sha256, config_version,
                      ingested.original_path, args.storage)
-    if args.engine == "gemini":
+    if args.engine in ("gemini", "external"):
         gcfg = dict(config.get("generative", {}))
         gcfg.setdefault("min_structure_ssim", 0.8)
         gcfg.setdefault("max_shift_px", 3)
         if args.model:
             gcfg["model"] = args.model
-        process = lambda j: _process_generative(j, config, args.storage, ingested.source_name, gcfg)
+        raw = None
+        if args.engine == "external":
+            raw = _read(args.raw, cv2.IMREAD_COLOR) if args.raw else None
+            if raw is None:
+                print("error: --engine external needs --raw <readable image>", file=sys.stderr)
+                return 1
+            gcfg["tool_label"] = f"external:{Path(args.raw).name}"
+        process = lambda j: _process_generative(j, config, args.storage, ingested.source_name, gcfg, raw, args.engine)
     else:
         process = lambda j: _process(j, config, args.storage, ingested.source_name, args.mask)
     run_job(job, process, args.storage)
