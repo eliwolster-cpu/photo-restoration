@@ -3,3 +3,4 @@ opencv-python==5.0.0.93
 pytest==9.1.1
 pillow==13.0.0
 pyyaml==6.0.3
+google-genai==2.32.0

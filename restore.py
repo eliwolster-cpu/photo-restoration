@@ -1,6 +1,7 @@
 """CLI entry point: ingest -> mask -> clean -> (sharpen) -> compare -> status + report.
 
 Usage: python restore.py <image> [--mask MASK.png] [--backend telea|ns|lama]
+       python restore.py <image> --engine gemini [--model ID]   (whole-photo generative restoration)
 """
 import argparse
 import json
@@ -15,6 +16,8 @@ from restoration.clean import CleanError, clean
 from restoration.compare import compare_outside_mask
 from restoration.config import ConfigError, load_config
 from restoration.faces import compare_faces, detect_faces
+from restoration.generative import (DEFAULT_MODEL, DEFAULT_PROMPT, GenerativeError, gemini_restore,
+                                     match_size, paste_original_faces)
 from restoration.ingest import IngestError, ingest
 from restoration.job import DONE, REVIEW, Job, run_job
 from restoration.sharpen import sharpen
@@ -76,6 +79,65 @@ def _decide(cfg, mask_fraction, outside, faces, mask):
     return (REVIEW if reasons else DONE), reasons
 
 
+def _save_outputs(storage, job_id, original, result, mask):
+    """Write the result PNG and the diff / before-after images; return the result path."""
+    results, reports = Path(storage) / "results", Path(storage) / "reports"
+    results.mkdir(parents=True, exist_ok=True)
+    reports.mkdir(parents=True, exist_ok=True)
+    result_path = results / f"{job_id}-restored.png"
+    _write_png(result_path, result)
+    # before | after | amplified difference (x8) with the mask outlined in red
+    diff = cv2.convertScaleAbs(cv2.absdiff(_bgr(original), _bgr(result)), alpha=8)
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cv2.drawContours(diff, contours, -1, (0, 0, 255), 1)
+    _write_png(reports / f"{job_id}-diff.png", diff)
+    _write_png(reports / f"{job_id}-before_after.png", np.hstack([_bgr(original), _bgr(result), diff]))
+    return result_path
+
+
+def _process_generative(job, config, storage, name, gcfg):
+    """Gemini restores the whole photo; original faces are pasted back; structure is checked."""
+    original = _read(job.data["paths"]["original"])
+    if original.dtype != np.uint8:
+        raise GenerativeError(f"unsupported bit depth {original.dtype}; only 8-bit images are supported")
+    faces_found = detect_faces(original)
+    raw = gemini_restore(original, gcfg.get("prompt", DEFAULT_PROMPT), gcfg.get("model", DEFAULT_MODEL))
+    aligned, resized, shift = match_size(_bgr(original), raw)
+    result = paste_original_faces(_bgr(original), aligned, faces_found, gcfg.get("face_pad", 0.25))
+
+    nothing = np.zeros(original.shape[:2], np.uint8)
+    structure = compare_outside_mask(_bgr(original), result, nothing)
+    faces = compare_faces(_bgr(original), result)
+    reasons = []
+    if structure.ssim < gcfg["min_structure_ssim"]:
+        reasons.append(f"structure SSIM {structure.ssim:.3f} below {gcfg['min_structure_ssim']} (objects may have changed)")
+    if shift > gcfg["max_shift_px"]:
+        reasons.append(f"result is shifted {shift:.1f}px from the original (max {gcfg['max_shift_px']})")
+    if not faces_found:
+        reasons.append("no face detected: a face the detector missed may have been redrawn")
+    if faces.result_count < faces.original_count:
+        reasons.append(f"faces detected dropped from {faces.original_count} to {faces.result_count}")
+    status = REVIEW if reasons else DONE
+
+    result_path = _save_outputs(storage, job.data["job_id"], _bgr(original), result, nothing)
+    tools = [f"gemini:{gcfg.get('model', DEFAULT_MODEL)}", "faces_pasted_back"]
+    report = {
+        "job_id": job.data["job_id"], "source_name": name, "status": status, "reasons": reasons,
+        "tools": tools, "config_version": job.data["config_version"], "engine": "gemini",
+        "model_resized_output": resized, "shift_px": shift, "faces_pasted_back": len(faces_found),
+        "structure": {"ssim": structure.ssim, "changed_fraction": structure.changed_fraction},
+        "faces": {"original": faces.original_count, "result": faces.result_count,
+                  "ssim": [c.ssim for c in faces.checks]},
+        "result": str(result_path), "sent_to_external_service": "Google Gemini API",
+    }
+    (Path(storage) / "reports" / f"{job.data['job_id']}-restored.json").write_text(
+        json.dumps(report, indent=2), encoding="utf-8")
+    log.info("%s job=%s status=%s engine=gemini model=%s structure_ssim=%.3f shift=%.1fpx faces_pasted_back=%d reasons=%s",
+             name, job.data["job_id"], status, gcfg.get("model", DEFAULT_MODEL), structure.ssim, shift,
+             len(faces_found), reasons)
+    return status, reasons
+
+
 def _process(job, config, storage, name, manual_mask):
     original = _read(job.data["paths"]["original"])
     _check_face_restore(config.get("face_restore", {}))
@@ -101,17 +163,7 @@ def _process(job, config, storage, name, manual_mask):
 
     job_id = job.data["job_id"]
     results, reports = Path(storage) / "results", Path(storage) / "reports"
-    results.mkdir(parents=True, exist_ok=True)
-    reports.mkdir(parents=True, exist_ok=True)
-    result_path = results / f"{job_id}-restored.png"
-    _write_png(result_path, result)
-    # before | after | amplified difference (x8) with the mask outlined in red
-    diff = cv2.absdiff(_bgr(original), _bgr(result))
-    diff = cv2.convertScaleAbs(diff, alpha=8)
-    contours, _ = cv2.findContours(cleaned.mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    cv2.drawContours(diff, contours, -1, (0, 0, 255), 1)
-    _write_png(reports / f"{job_id}-diff.png", diff)
-    _write_png(reports / f"{job_id}-before_after.png", np.hstack([_bgr(original), _bgr(result), diff]))
+    result_path = _save_outputs(storage, job_id, original, result, cleaned.mask)
 
     report = {
         "job_id": job_id, "source_name": name, "status": status, "reasons": reasons,
@@ -139,6 +191,10 @@ def main(argv=None):
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument("--mask", help="manual damage mask (white = damage); default is automatic")
     parser.add_argument("--backend", choices=["telea", "ns", "lama"], help="override clean.backend")
+    parser.add_argument("--engine", choices=["local", "gemini"], default="local",
+                        help="local = mask + inpainting; gemini = whole-photo generative restoration "
+                             "(sends the image to Google; needs GEMINI_API_KEY in .env)")
+    parser.add_argument("--model", help="Gemini model id (default from config generative.model)")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stderr)
@@ -152,7 +208,16 @@ def main(argv=None):
         return 1
     job = Job.create(ingested.job_id, ingested.source_name, ingested.sha256, config_version,
                      ingested.original_path, args.storage)
-    run_job(job, lambda j: _process(j, config, args.storage, ingested.source_name, args.mask), args.storage)
+    if args.engine == "gemini":
+        gcfg = dict(config.get("generative", {}))
+        gcfg.setdefault("min_structure_ssim", 0.8)
+        gcfg.setdefault("max_shift_px", 3)
+        if args.model:
+            gcfg["model"] = args.model
+        process = lambda j: _process_generative(j, config, args.storage, ingested.source_name, gcfg)
+    else:
+        process = lambda j: _process(j, config, args.storage, ingested.source_name, args.mask)
+    run_job(job, process, args.storage)
     if job.status == "failed":
         print(f"job {job.data['job_id']}: failed: {job.data['error']}", file=sys.stderr)
         return 1

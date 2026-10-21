@@ -37,3 +37,9 @@ decide:                       # any breach -> status "review"
   min_outside_ssim: 0.98
   max_outside_changed_fraction: 0.01
   min_face_ssim: 0.90
+
+generative:                   # used with: restore.py --engine gemini (sends the photo to Google)
+  model: gemini-2.5-flash-image   # "Nano Banana"; gemini-3-pro-image-preview = "Nano Banana Pro"
+  face_pad: 0.25              # original face regions pasted back, padded by this share of the box
+  min_structure_ssim: 0.80    # low-frequency SSIM vs the original; below -> review
+  max_shift_px: 3             # global shift between result and original; above -> review
