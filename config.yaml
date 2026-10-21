@@ -3,3 +3,28 @@ ingest:
   max_file_bytes: 209715200   # 200 MB
   max_pixels: 100000000
   min_side: 32
+
+clean:
+  backend: telea              # telea | ns | lama (lama needs: pip install simple-lama-inpainting)
+  radius: 3                   # OpenCV inpaint radius
+  mask:                       # automatic damage mask (used when no --mask is given)
+    kernel_size: 9
+    threshold: 30
+    dilate_px: 1
+
+sharpen:                      # global, applied after cleaning; off by default
+  enabled: false
+  amount: 0.5
+  sigma: 1.0
+
+face_restore:                 # not implemented yet; enabling it fails loudly
+  enabled: false
+  backend: codeformer
+  fidelity: 0.85
+  min_fidelity: 0.8           # lower values are refused
+
+decide:                       # any breach -> status "review"
+  max_mask_fraction: 0.10     # a bigger mask is probably real detail, not damage
+  min_outside_ssim: 0.98
+  max_outside_changed_fraction: 0.01
+  min_face_ssim: 0.90

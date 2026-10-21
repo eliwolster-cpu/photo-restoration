@@ -75,6 +75,8 @@ def test_tiny_image_rejected(tmp_path):
 
 
 def test_cli_exit_codes(photo, tmp_path, capsys):
+    # the full pipeline runs now, so use a smooth image (noise would be masked entirely)
+    cv2.imwrite(str(photo), cv2.GaussianBlur(cv2.imread(str(photo)), (0, 0), 10))
     storage = str(tmp_path / "s")
     assert restore.main([str(photo), "--storage", storage]) == 0
     assert restore.main([str(photo), "--storage", storage]) == 0
