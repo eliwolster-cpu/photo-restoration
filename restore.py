@@ -48,6 +48,12 @@ def _check_face_restore(cfg):
     raise CleanError("face_restore is not implemented yet (CodeFormer needs a GPU/runner decision)")
 
 
+def _overlapping_faces(faces, mask):
+    """Indices of detected faces whose box contains any damage-mask pixel."""
+    return [i for i, c in enumerate(faces.checks)
+            if mask[c.box.y:c.box.y + c.box.h, c.box.x:c.box.x + c.box.w].any()]
+
+
 def _decide(cfg, mask_fraction, outside, faces, mask):
     """Return (status, reasons). Any doubt -> review; a suspected face change is never done."""
     reasons = []
@@ -59,9 +65,9 @@ def _decide(cfg, mask_fraction, outside, faces, mask):
         reasons.append(f"{100 * outside.changed_fraction:.2f}% of pixels changed outside the mask")
     if faces.result_count < faces.original_count:
         reasons.append(f"faces detected dropped from {faces.original_count} to {faces.result_count}")
+    overlapping = _overlapping_faces(faces, mask)
     for i, c in enumerate(faces.checks):
-        f = c.box
-        if mask[f.y:f.y + f.h, f.x:f.x + f.w].any():
+        if i in overlapping:
             reasons.append(f"face {i}: damage mask touches the face")
         elif c.ssim < cfg["min_face_ssim"]:
             reasons.append(f"face {i}: SSIM {c.ssim:.3f} below {cfg['min_face_ssim']}")
@@ -88,6 +94,7 @@ def _process(job, config, storage, name, manual_mask):
     outside = compare_outside_mask(original, result, cleaned.mask)
     faces = compare_faces(original, result)
     status, reasons = _decide(config["decide"], cleaned.mask_fraction, outside, faces, cleaned.mask)
+    face_overlap = _overlapping_faces(faces, cleaned.mask)
     if not cleaned.outside_identical:
         status, reasons = REVIEW, reasons + ["clean changed pixels outside the mask"]
 
@@ -109,6 +116,7 @@ def _process(job, config, storage, name, manual_mask):
         "job_id": job_id, "source_name": name, "status": status, "reasons": reasons,
         "tools": tools, "config_version": job.data["config_version"],
         "mask_fraction": cleaned.mask_fraction, "face_fidelity_weight": None,
+        "face_overlap": bool(face_overlap),
         "clean_outside_mask_identical": cleaned.outside_identical,
         "outside_mask": {"ssim": outside.ssim, "changed_fraction": outside.changed_fraction},
         "faces": {"original": faces.original_count, "result": faces.result_count,
@@ -116,9 +124,9 @@ def _process(job, config, storage, name, manual_mask):
         "result": str(result_path),
     }
     (reports / f"{job_id}-restored.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
-    log.info("%s job=%s status=%s mask=%.2f%% tools=%s face_w=none outside_mask_identical=%s reasons=%s",
-             name, job_id, status, 100 * cleaned.mask_fraction, ",".join(tools),
-             cleaned.outside_identical, reasons)
+    log.info("%s job=%s status=%s mask=%.2f%% face_overlap=%s tools=%s face_w=none outside_mask_identical=%s reasons=%s",
+             name, job_id, status, 100 * cleaned.mask_fraction, "yes" if face_overlap else "no",
+             ",".join(tools), cleaned.outside_identical, reasons)
     return status, reasons
 
 
