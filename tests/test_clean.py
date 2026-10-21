@@ -92,3 +92,31 @@ def test_sharpen_increases_sharpness_and_keeps_size(photo):
     s = sharpen(photo, 0.5, 1.0)
     lap = lambda x: cv2.Laplacian(cv2.cvtColor(x, cv2.COLOR_BGR2GRAY), cv2.CV_64F).var()
     assert s.shape == photo.shape and lap(s) > lap(photo)
+
+
+def _sepia_with_stain():
+    rng = np.random.default_rng(1)
+    gray = cv2.GaussianBlur(rng.integers(120, 160, (200, 200), dtype=np.uint8), (0, 0), 3)
+    img = cv2.merge([(gray * 0.8).astype(np.uint8), (gray * 0.9).astype(np.uint8), gray])  # B, G, R: sepia
+    stained = img.copy()
+    cv2.circle(stained, (100, 100), 8, (40, 40, 150), -1)   # reddish-brown blotch
+    return img, cv2.GaussianBlur(stained, (0, 0), 1.2)
+
+
+def test_stain_is_corrected_without_touching_the_rest():
+    clean_img, stained = _sepia_with_stain()
+    cfg = {"backend": "telea", "stains": {"enabled": True, "border_margin": 0}}
+    r = clean(stained, cfg, np.zeros(stained.shape[:2], np.uint8))
+    assert r.stain_fraction > 0 and r.outside_identical
+    err_before = np.abs(stained[90:110, 90:110].astype(int) - clean_img[90:110, 90:110]).mean()
+    err_after = np.abs(r.image[90:110, 90:110].astype(int) - clean_img[90:110, 90:110]).mean()
+    assert err_after < err_before / 2
+
+
+def test_stains_are_off_by_default_and_skip_faces():
+    _, stained = _sepia_with_stain()
+    off = clean(stained, CFG, np.zeros(stained.shape[:2], np.uint8))
+    assert off.stain_fraction == 0 and np.array_equal(off.image, stained)
+    cfg = {"backend": "telea", "stains": {"enabled": True, "border_margin": 0}}
+    on_face = clean(stained, cfg, np.zeros(stained.shape[:2], np.uint8), exclude_boxes=[(60, 60, 80, 80)])
+    assert on_face.stain_fraction == 0

@@ -30,6 +30,7 @@ class Face:
     w: int
     h: int
     score: float
+    landmarks: tuple = ()   # YuNet points: right eye, left eye, nose tip, mouth corners (x, y) in pixels
 
 
 @dataclass(frozen=True)
@@ -71,7 +72,8 @@ def detect_faces(image, model_path=DEFAULT_MODEL, score_threshold=SCORE_THRESHOL
         x0, y0 = max(x, 0), max(y, 0)
         x1, y1 = min(x + fw, w), min(y + fh, h)
         if x1 > x0 and y1 > y0:
-            faces.append(Face(x0, y0, x1 - x0, y1 - y0, float(row[-1])))
+            landmarks = tuple((float(row[4 + 2 * i]), float(row[5 + 2 * i])) for i in range(5))
+            faces.append(Face(x0, y0, x1 - x0, y1 - y0, float(row[-1]), landmarks))
     return faces
 
 

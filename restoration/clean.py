@@ -26,6 +26,7 @@ class CleanResult:
     backend: str
     mask_fraction: float        # share of the image covered by the mask
     outside_identical: bool     # True if every pixel outside the mask equals the original
+    stain_fraction: float = 0.0  # part of the mask that is stain correction rather than crack inpainting
 
 
 def detect_damage(image, kernel_size=9, threshold=30, dilate_px=1):
@@ -38,6 +39,64 @@ def detect_damage(image, kernel_size=9, threshold=30, dilate_px=1):
     if dilate_px > 0:
         mask = cv2.dilate(mask, np.ones((2 * dilate_px + 1,) * 2, np.uint8))
     return mask
+
+
+def detect_stains(image, cfg, exclude_boxes=()):
+    """Mask (255) of compact colored blotches: chroma far from the local median, not on faces.
+
+    Only color images are checked (a gray scan has no chroma to tell a stain from the scene).
+    """
+    if image.ndim != 3 or image.shape[2] < 3:
+        return np.zeros(image.shape[:2], np.uint8)
+    lab = cv2.cvtColor(image[..., :3], cv2.COLOR_BGR2LAB)
+    chroma = lab[..., 1:].astype(np.float32) - cv2.medianBlur(lab, cfg.get("background_size", 61))[..., 1:]
+    dev = cv2.GaussianBlur(np.hypot(chroma[..., 0], chroma[..., 1]), (0, 0), 1.5)
+    # hysteresis: a region needs a strong core (chroma_threshold) and grows to its weaker edge
+    low = cv2.morphologyEx(((dev > cfg.get("chroma_low", 5)) * 255).astype(np.uint8), cv2.MORPH_CLOSE,
+                           cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9)))
+    n, labels, st, _ = cv2.connectedComponentsWithStats(low, connectivity=8)
+    strong = np.unique(labels[dev > cfg.get("chroma_threshold", 10)])
+    cand = np.where(np.isin(labels, strong[strong > 0]), 255, 0).astype(np.uint8)
+    margin = int(cfg.get("border_margin", 0.03) * min(cand.shape))
+    if margin > 0:   # the scan edge against the white background looks like a stain
+        cand[:margin] = cand[-margin:] = 0
+        cand[:, :margin] = cand[:, -margin:] = 0
+    n, labels, st, _ = cv2.connectedComponentsWithStats(cand, connectivity=8)
+    max_area = cfg.get("max_area_fraction", 0.01) * cand.size
+    mask = np.zeros_like(cand)
+    for i in range(1, n):
+        if cfg.get("min_area", 25) <= st[i, cv2.CC_STAT_AREA] <= max_area:
+            mask[labels == i] = 255
+    grow = cfg.get("dilate_px", 6)
+    if grow > 0:
+        mask = cv2.dilate(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * grow + 1,) * 2))
+    for x, y, w, h in exclude_boxes:
+        mask[max(y, 0):y + h, max(x, 0):x + w] = 0
+    return mask
+
+
+def correct_stains(image, mask, cfg):
+    """Fix brightness and color inside the mask without inventing detail.
+
+    Per Lab channel: new = low-frequency level of the surroundings (from pixels outside the
+    mask) + the pixel's own fine detail, so grain and real edges under a stain survive.
+    """
+    if not mask.any():
+        return image.copy()
+    sigma = cfg.get("detail_sigma", 3.0)
+    reach = cfg.get("surround_sigma", 12.0)
+    lab = cv2.cvtColor(image[..., :3], cv2.COLOR_BGR2LAB).astype(np.float32)
+    known = (mask == 0).astype(np.float32)
+    out = lab.copy()
+    for c in range(3):
+        ch = lab[..., c]
+        detail = ch - cv2.GaussianBlur(ch, (0, 0), sigma)
+        level = cv2.GaussianBlur(ch * known, (0, 0), reach) / np.maximum(cv2.GaussianBlur(known, (0, 0), reach), 1e-3)
+        out[..., c] = level + detail
+    fixed = cv2.cvtColor(np.clip(out, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+    result = image.copy()
+    result[..., :3][mask > 0] = fixed[mask > 0]
+    return result
 
 
 def _gray(image):
@@ -74,11 +133,13 @@ def blend_to_original(original, result, mask):
     return out
 
 
-def clean(image, cfg, mask=None, name=""):
-    """Inpaint the damage and return CleanResult.
+def clean(image, cfg, mask=None, name="", exclude_boxes=()):
+    """Correct stains and inpaint cracks; return CleanResult.
 
-    cfg is the `clean` section of config.yaml. If `mask` is None it is detected
-    automatically; a given mask is binarized (nonzero = damage). Alpha is kept as is.
+    cfg is the `clean` section of config.yaml. `mask` (cracks) is detected automatically if
+    None; a given mask is binarized (nonzero = damage). If cfg["stains"]["enabled"], colored
+    blotches outside `exclude_boxes` (x, y, w, h) get brightness/color correction first.
+    Everything outside the union of both masks is the original. Alpha is kept as is.
     """
     backend = cfg.get("backend", "telea")
     if backend not in BACKENDS:
@@ -90,20 +151,27 @@ def clean(image, cfg, mask=None, name=""):
     elif mask.shape[:2] != image.shape[:2]:
         raise CleanError(f"mask size {mask.shape[:2]} does not match image {image.shape[:2]}")
     mask = np.where(mask > 0, 255, 0).astype(np.uint8)
-    fraction = float((mask > 0).mean())
 
-    if fraction == 0:
-        result = image.copy()
-    else:
-        alpha = image[..., 3:] if image.ndim == 3 and image.shape[2] == 4 else None
-        color = image[..., :3] if alpha is not None else image
+    stains_cfg = cfg.get("stains", {})
+    stain_mask = detect_stains(image, stains_cfg, exclude_boxes) if stains_cfg.get("enabled", False)         else np.zeros_like(mask)
+    union = np.maximum(mask, stain_mask)
+    fraction = float((union > 0).mean())
+    stain_fraction = float((stain_mask > 0).mean())
+
+    result = image.copy()
+    if stain_mask.any():
+        result = correct_stains(result, stain_mask, stains_cfg)
+    if mask.any():
+        alpha = result[..., 3:] if result.ndim == 3 and result.shape[2] == 4 else None
+        color = result[..., :3] if alpha is not None else result
         if backend == "lama":
             filled = _inpaint_lama(color, mask)
         else:
             filled = _inpaint_opencv(color, mask, backend, cfg.get("radius", 3))
-        result = blend_to_original(image, np.concatenate([filled, alpha], axis=2) if alpha is not None else filled, mask)
+        result = blend_to_original(result, np.concatenate([filled, alpha], axis=2) if alpha is not None else filled, mask)
+    result = blend_to_original(image, result, union)
 
-    identical = bool(np.array_equal(result[mask == 0], image[mask == 0]))
-    log.info("clean %s: backend=%s mask=%.2f%% outside_mask_identical=%s",
-             name or "-", backend, 100 * fraction, identical)
-    return CleanResult(result, mask, backend, fraction, identical)
+    identical = bool(np.array_equal(result[union == 0], image[union == 0]))
+    log.info("clean %s: backend=%s mask=%.2f%% (stains %.2f%%) outside_mask_identical=%s",
+             name or "-", backend, 100 * fraction, 100 * stain_fraction, identical)
+    return CleanResult(result, union, backend, fraction, identical, stain_fraction)

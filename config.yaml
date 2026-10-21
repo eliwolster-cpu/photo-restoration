@@ -12,6 +12,12 @@ clean:
     threshold: 30
     dilate_px: 1
 
+  stains:                     # brightness/color correction of colored blotches (not inpainting); off by default
+    enabled: false
+    chroma_threshold: 10      # strong core of a stain (Lab chroma distance from the local median)
+    chroma_low: 5             # the region grows to this weaker level
+    border_margin: 0.03       # ignore this share of each side (the scan edge looks like a stain)
+
 sharpen:                      # global, applied after cleaning; off by default
   enabled: false
   amount: 0.5

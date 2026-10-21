@@ -14,7 +14,7 @@ import numpy as np
 from restoration.clean import CleanError, clean
 from restoration.compare import compare_outside_mask
 from restoration.config import ConfigError, load_config
-from restoration.faces import compare_faces
+from restoration.faces import compare_faces, detect_faces
 from restoration.ingest import IngestError, ingest
 from restoration.job import DONE, REVIEW, Job, run_job
 from restoration.sharpen import sharpen
@@ -83,8 +83,9 @@ def _process(job, config, storage, name, manual_mask):
     if manual_mask is not None and mask_in is None:
         raise CleanError(f"cannot read mask: {manual_mask}")
 
-    cleaned = clean(original, config["clean"], mask_in, name)
-    tools = [f"inpaint:{cleaned.backend}"]
+    boxes = [(f.x, f.y, f.w, f.h) for f in detect_faces(original)]
+    cleaned = clean(original, config["clean"], mask_in, name, boxes)
+    tools = [f"inpaint:{cleaned.backend}"] + (["stain_correction"] if cleaned.stain_fraction > 0 else [])
     result = cleaned.image
     sharpen_cfg = config.get("sharpen", {})
     if sharpen_cfg.get("enabled", False):
@@ -115,7 +116,8 @@ def _process(job, config, storage, name, manual_mask):
     report = {
         "job_id": job_id, "source_name": name, "status": status, "reasons": reasons,
         "tools": tools, "config_version": job.data["config_version"],
-        "mask_fraction": cleaned.mask_fraction, "face_fidelity_weight": None,
+        "mask_fraction": cleaned.mask_fraction, "stain_fraction": cleaned.stain_fraction,
+        "face_fidelity_weight": None,
         "face_overlap": bool(face_overlap),
         "clean_outside_mask_identical": cleaned.outside_identical,
         "outside_mask": {"ssim": outside.ssim, "changed_fraction": outside.changed_fraction},
